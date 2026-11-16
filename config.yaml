@@ -1,0 +1,45 @@
+# wct2g1 pipeline configuration. Every path, threshold and URL lives here.
+# Relative paths resolve against the repo root (the directory holding this file).
+
+seed: 0
+
+paths:
+  data: data
+  raw: data/raw
+  shots: data/shots
+  tracks: data/tracks
+  smpl: data/smpl
+  clean: data/clean
+  g1: data/g1
+  policies: data/policies
+  final_dataset: data/final_dataset
+  manifests: data/manifests
+  review: review
+  smplx_models: /path/to/smplx_models   # download by hand from the SMPL-X site
+  logs: data/logs
+
+# Conda env used for each stage (scripts/run_stage.sh reads this).
+envs:
+  acquire: wct-data
+  segment: wct-data
+  track: wct-data
+  reconstruct: gvhmr
+  clean: wct-data
+  retarget: gmr
+  train_filter: isaaclab
+  report: wct-data
+
+acquire:
+  # World Chase Tag channel or playlist URLs. Non-commercial research use only.
+  sources: []
+  #  - https://www.youtube.com/@WorldChaseTag/videos
+  ytdlp_bin: yt-dlp
+  format: "bv*[height<=1080][fps>=50]+ba/bv*[height<=1080]+ba/b"
+  merge_output_format: mp4
+  output_template: "%(id)s/%(id)s.%(ext)s"   # relative to paths.raw
+  archive_file: archive.txt                  # relative to paths.raw
+  sleep_interval_s: 5
+  max_sleep_interval_s: 15
+  match_filters: []      # e.g. ["upload_date>=20240101", "title~='(?i)world championship'"]
+  video_url_template: "https://www.youtube.com/watch?v={id}"   # used with --ids
+  extra_args: []

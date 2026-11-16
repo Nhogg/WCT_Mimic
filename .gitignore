@@ -1,0 +1,8 @@
+# Footage and derived motions are World Chase Tag's / SMPL-X licensed: never commit.
+data/
+review/*
+!review/.gitkeep
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
