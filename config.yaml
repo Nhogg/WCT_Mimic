@@ -15,7 +15,11 @@ paths:
   final_dataset: data/final_dataset
   manifests: data/manifests
   review: review
-  smplx_models: /path/to/smplx_models   # download by hand from the SMPL-X site
+  models: data/models
+  # SMPL/SMPL-X body models (licensed; download by hand). Layout:
+  #   smplx/SMPLX_NEUTRAL.npz  smplx/SMPLX_NEUTRAL.pkl   (SMPL-X v1.1, used by GVHMR + GMR)
+  #   smpl/SMPL_NEUTRAL.pkl                           (SMPL v1.1, GVHMR rendering)
+  body_models: data/models/body_models
   logs: data/logs
 
 # Conda env used for each stage (scripts/run_stage.sh reads this).
@@ -34,7 +38,8 @@ acquire:
   sources: []
   #  - https://www.youtube.com/@WorldChaseTag/videos
   ytdlp_bin: yt-dlp
-  format: "bv*[height<=1080][fps>=50]+ba/bv*[height<=1080]+ba/b"
+  # Prefer 50/60 fps, then H.264 (AV1/VP9 decode support varies across the stage envs).
+  format: "bv*[height<=1080][fps>=50][vcodec^=avc1]+ba/bv*[height<=1080][fps>=50]+ba/bv*[height<=1080][vcodec^=avc1]+ba/bv*[height<=1080]+ba/b"
   merge_output_format: mp4
   output_template: "%(id)s/%(id)s.%(ext)s"   # relative to paths.raw
   archive_file: archive.txt                  # relative to paths.raw
@@ -43,3 +48,108 @@ acquire:
   match_filters: []      # e.g. ["upload_date>=20240101", "title~='(?i)world championship'"]
   video_url_template: "https://www.youtube.com/watch?v={id}"   # used with --ids
   extra_args: []
+
+segment:
+  detector:              # PySceneDetect AdaptiveDetector
+    adaptive_threshold: 3.0
+    min_scene_len_frames: 15
+    window_width: 2
+    min_content_val: 15.0
+  min_shot_s: 1.0        # shorter -> rejected
+  max_shot_s: 40.0       # longer -> kept but flagged for review (probably not one chase)
+  clip:
+    model: ViT-L-14
+    pretrained: openai
+    device: auto         # auto | cpu | cuda
+    samples_per_shot: 3  # frames sampled evenly inside the shot
+    keep_threshold: 0.5  # summed softmax prob of keep prompts, averaged over samples
+    keep_prompts:
+      - wide shot of athletes running on an indoor obstacle course
+      - slow motion replay of an athlete vaulting
+    drop_prompts:
+      - close-up of a person's face
+      - crowd in stands
+      - scoreboard graphic
+      - commentators at a desk
+  slowmo:
+    prompts:             # [slow-motion, real-time]; prob of the first is used
+      - slow motion replay of an athlete
+      - real-time sports footage of an athlete
+    prob_min: 0.5
+    flow_pairs: 8        # consecutive frame pairs sampled per shot for optical flow
+    flow_width: 320      # frames resized to this width for flow
+    neighbours: 3        # shots each side used as the flow reference
+    flow_ratio_max: 0.5  # shot flow / median neighbour flow below this -> slow-mo
+  cut:
+    vcodec: libx264
+    crf: 16
+    preset: fast
+  review:
+    sample_n: 50
+    reject_sample_n: 20  # also show some rejected shots, to sanity-check recall
+    thumb_width: 320
+
+track:
+  model: yolo26x.pt        # ultralytics weights; auto-downloaded
+  imgsz: 1280              # inference size; runners are often small in wide shots
+  conf: 0.25
+  device: auto             # auto | cpu | 0
+  tracker:                 # overrides on ultralytics' botsort.yaml defaults
+    tracker_type: botsort
+    track_high_thresh: 0.25
+    track_low_thresh: 0.1
+    new_track_thresh: 0.25
+    track_buffer: 50       # frames (~1 s at 50 fps) a lost track stays alive
+    match_thresh: 0.8
+    fuse_score: true
+    gmc_method: sparseOptFlow   # compensates broadcast camera pans
+    proximity_thresh: 0.5
+    appearance_thresh: 0.8
+    with_reid: true
+    model: auto            # ReID from detector features
+  stitch:
+    max_gap_s: 0.5         # join tracklets of one person split by occlusion
+    iou_min: 0.3           # boxes overlap enough ...
+    max_center_dist_h: 0.75   # ... or centres within this many box heights
+    max_height_ratio: 1.4     # and box heights within this ratio
+  select:
+    max_tracks: 2
+    min_coverage: 0.7      # visible in >= 70% of the shot's frames
+    min_median_box_h: 0.15 # median box height >= 15% of frame height
+    max_truncated_frac: 0.5   # box touching top/bottom edge (body cut off) in at most this share of frames
+    edge_margin_px: 2
+    min_dur_s: 1.5         # after stitching
+    # rank = coverage + w_height * median_box_h + w_motion * (box heights moved per second)
+    w_height: 1.0
+    w_motion: 0.5
+  smooth:
+    savgol_window_s: 0.25
+    savgol_polyorder: 2
+  review:
+    sample_n: 10           # shots that get an overlay video (plus any --ids)
+    overlay_width: 960
+
+reconstruct:
+  gvhmr_root: third_party/GVHMR
+  checkpoints: data/models/gvhmr/checkpoints   # linked to <gvhmr_root>/inputs/checkpoints
+  # GVHMR is trained at 30 fps and predicts per-frame motion, so by default frames are
+  # resampled to 30 fps before inference. "native" runs every frame (spec's original plan).
+  input_fps: 30            # number or "native"
+  f_mm: null               # full-frame focal length guess; null = GVHMR default. Broadcast zoom may need larger.
+  vo:                      # GVHMR SimpleVO (camera rotation from SIFT matches)
+    scale: 0.5
+    step: 8
+    method: sift
+  bbox_enlarge: 1.2        # GVHMR demo default
+  static_shot_ids: []      # shots to run with static-camera mode
+  review:
+    sample_n: 5            # tracks that get incam + world-view renders (plus any --ids)
+
+slurm:
+  head_host: head
+  defaults:
+    partition: gpu
+    gres: "gpu:1"
+    cpus_per_task: 8
+    mem: 48G
+    time: "04:00:00"

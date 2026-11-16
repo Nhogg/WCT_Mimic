@@ -16,3 +16,4 @@ dependencies:
       - scenedetect[opencv]
       - open_clip_torch
       - ultralytics
+      - lap>=0.5.12     # BoT-SORT assignment (ultralytics otherwise auto-installs it)
