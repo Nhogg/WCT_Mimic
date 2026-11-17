@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import logging
+import os
 import random
 import sys
 from datetime import datetime
@@ -64,6 +65,8 @@ def main(argv: list[str] | None = None) -> int:
         sp = sub.add_parser(name)
         sp.add_argument("--limit", type=int, default=None, help="process at most N items")
         sp.add_argument("--ids", nargs="+", default=None, help="only these item ids")
+        sp.add_argument("--shard", default=None,
+                        help="i/n: only items whose id hashes to shard i of n (SLURM arrays)")
         if name == "acquire":
             sp.add_argument("--manifest-only", action="store_true",
                             help="skip downloading; rebuild raw manifest from disk")
@@ -86,6 +89,9 @@ def main(argv: list[str] | None = None) -> int:
         report(cfg)
         return 0
 
+    if getattr(args, "shard", None):
+        os.environ["WCT2G1_SHARD"] = args.shard
+        logging.getLogger(__name__).info("shard %s", args.shard)
     mod = importlib.import_module(STAGES[args.cmd])
     kwargs = {"limit": args.limit, "ids": args.ids}
     if args.cmd == "acquire":

@@ -20,7 +20,7 @@ import yaml
 from scipy.signal import savgol_filter
 
 from .config import Config
-from .manifest import failed, ok, read_manifest, rejected, upsert, write_manifest
+from .manifest import shard, failed, ok, read_manifest, rejected, upsert, write_manifest
 
 log = logging.getLogger(__name__)
 
@@ -276,6 +276,7 @@ def run(cfg: Config, limit: int | None = None, ids: list[str] | None = None) -> 
         bad = set(tr.loc[tr["status"].str.startswith("failed:"), "shot_id"])
         done = set(tr["shot_id"]) - bad
         shots = shots[~shots["shot_id"].isin(done)]
+    shots = shard(shots, "shot_id")
     if limit:
         shots = shots.head(limit)
     rng = random.Random(cfg["seed"])
@@ -290,9 +291,6 @@ def run(cfg: Config, limit: int | None = None, ids: list[str] | None = None) -> 
             log.exception("track failed for %s", shot["shot_id"])
             rows = [dict(track_id=f"{shot['shot_id']}_none", shot_id=shot["shot_id"],
                          video_id=shot["video_id"], status=failed(e))]
-        cur = read_manifest(cfg, "tracks")
-        if not cur.empty:
-            write_manifest(cfg, "tracks", cur[cur["shot_id"] != shot["shot_id"]])
-        upsert(cfg, "tracks", rows)
+        upsert(cfg, "tracks", rows, replace=("shot_id", shot["shot_id"]))
         n_ok = sum(r["status"] == "ok" for r in rows)
         log.info("%s: %d runner tracks", shot["shot_id"], n_ok)

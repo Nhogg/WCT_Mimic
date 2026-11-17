@@ -42,3 +42,34 @@ def test_status_helpers():
     assert m.status_kind(m.rejected("too_short")) == "rejected"
     assert m.failed("line1\nline2") == "failed:line1 line2"
     assert m.failed(ValueError()) == "failed:ValueError"
+
+
+def test_filter_ids_tolerates_missing_columns():
+    import pandas as pd
+
+    from wct2g1.manifest import filter_ids
+
+    df = pd.DataFrame({"track_id": ["a_t1", "b_t1"], "status": ["failed:x", "ok"]})
+    assert list(filter_ids(df, ["a_t1"])["track_id"]) == ["a_t1"]
+    assert filter_ids(df, ["zzz"]).empty
+    assert filter_ids(pd.DataFrame(), ["a"]).empty
+
+
+def test_upsert_replace_and_shard(cfg):
+    import pandas as pd
+
+    from wct2g1.manifest import read_manifest, shard, upsert
+
+    upsert(cfg, "clean", [dict(clip_id="t1_c0", track_id="t1", status="ok"),
+                          dict(clip_id="t1_c1", track_id="t1", status="ok"),
+                          dict(clip_id="t2_c0", track_id="t2", status="ok")])
+    upsert(cfg, "clean", [dict(clip_id="t1_c0", track_id="t1", status="rejected:x")],
+           replace=("track_id", "t1"))
+    d = read_manifest(cfg, "clean")
+    assert sorted(d["clip_id"]) == ["t1_c0", "t2_c0"]
+    assert not (cfg.path_of("manifests") / "clean.lock").exists()
+
+    df = pd.DataFrame({"k": [f"id{i}" for i in range(50)]})
+    parts = [shard(df, "k", f"{i}/4") for i in range(4)]
+    assert sum(len(p) for p in parts) == 50
+    assert set().union(*(set(p["k"]) for p in parts)) == set(df["k"])
