@@ -4,6 +4,6 @@
 [submodule "third_party/GMR"]
 	path = third_party/GMR
 	url = https://github.com/YanjieZe/GMR
-[submodule "third_party/whole_body_tracking"]
-	path = third_party/whole_body_tracking
-	url = https://github.com/HybridRobotics/whole_body_tracking
+[submodule "third_party/mjlab"]
+	path = third_party/mjlab
+	url = https://github.com/mujocolab/mjlab
