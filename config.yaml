@@ -30,7 +30,7 @@ envs:
   reconstruct: gvhmr
   clean: wct-data
   retarget: gmr
-  train_filter: isaaclab
+  train_filter: mjlab
   report: wct-data
 
 acquire:
@@ -134,16 +134,94 @@ reconstruct:
   checkpoints: data/models/gvhmr/checkpoints   # linked to <gvhmr_root>/inputs/checkpoints
   # GVHMR is trained at 30 fps and predicts per-frame motion, so by default frames are
   # resampled to 30 fps before inference. "native" runs every frame (spec's original plan).
-  input_fps: 30            # number or "native"
+  input_fps: 30            # target; actual = src_fps / integer stride (50 -> 25), or "native"
   f_mm: null               # full-frame focal length guess; null = GVHMR default. Broadcast zoom may need larger.
-  vo:                      # GVHMR SimpleVO (camera rotation from SIFT matches)
-    scale: 0.5
-    step: 8
-    method: sift
+  vo:                      # camera rotation for moving-camera shots
+    backend: simple        # simple (GVHMR SimpleVO, SIFT) | dpvo (unreliable on M1 shot: NaN/implausible; falls back to simple)
+    scale: 0.5             # simple: image scale
+    step: 8                # simple: frame step
+    method: sift           # simple: feature type
+    dpvo_resize: 0.5       # dpvo: image scale (GVHMR demo default)
+    dpvo_buffer_margin: 32 # dpvo: keyframe buffer = n_frames + margin (demo 4000 preallocates tens of GB)
   bbox_enlarge: 1.2        # GVHMR demo default
   static_shot_ids: []      # shots to run with static-camera mode
   review:
     sample_n: 5            # tracks that get incam + world-view renders (plus any --ids)
+
+clean:
+  fps: 50                    # output frame rate
+  smooth:
+    cutoff_hz: 8.0           # zero-phase Butterworth low-pass on root transl + 6D joint rotations
+    order: 4
+  ground:
+    floor_percentile: 5      # floor = this percentile of per-frame lowest sole height
+    mode: rolling            # global (one floor height) | rolling (slowly varying; absorbs GVHMR vertical drift)
+    window_s: 1.0            # rolling: window for the percentile and its smoothing
+  contact:
+    height_m: 0.05           # sole within this of the floor ...
+    speed_mps: 0.6           # ... and foot joint slower than this -> in contact
+    min_frames: 3            # drop contact blips shorter than this
+    z_fix_cutoff_hz: 4.0     # smoothing of the vertical (sole-to-floor) root correction
+  reject:
+    max_root_speed_mps: 12.0
+    max_root_jump_m: 0.5     # between consecutive GVHMR frames (before resampling)
+    below_floor_m: 0.03      # sole lower than -this counts as "below floor"
+    max_below_floor_frac: 0.2
+  cut:
+    min_s: 2.0
+    max_s: 10.0
+    speed_smooth_s: 0.2      # root speed is smoothed before looking for low-velocity cut points
+    trim_edges_s: 0.3        # dropped from both ends of each track (reconstruction is worst there)
+  obstacle:                  # frames that look like obstacle use (course not in the motion data)
+    split: true              # cut clips at obstacle/flat boundaries; else flag whole segments
+    hand_height_m: 0.25      # a wrist this close to the floor
+    pelvis_rise_m: 0.30      # pelvis this far above its standing height (global floor)
+    air_height_m: 0.10       # both soles above the floor by this ...
+    airborne_s: 0.5          # ... for longer than this
+    margin_s: 0.3            # obstacle frames are dilated by this on each side
+  smplx_gender: neutral
+  num_betas: 10
+  export_num_betas: 16      # AMASS SMPL-X / GMR default; extra coefficients zero-padded
+
+retarget:
+  gmr_root: third_party/GMR
+  robot: unitree_g1              # GMR target (29-DoF)
+  fps: 50
+  height_source: measured        # measured (Stage 5 mesh height) | gmr_betas (GMR's 1.66 + 0.1*beta0)
+  limit_tol_rad: 0.02            # joint within this of a limit counts as "at limit"
+  max_limit_frac: null      # reject above this fraction of frames with any joint at a limit; null = report only
+                            # (GMR clamps to limits, so saturation is common; Stage 7 judges feasibility)
+  review:
+    sample_n: 5                  # clips that get a MuJoCo preview video (plus any --ids)
+    width: 640
+    height: 480
+
+train_filter:
+  # Simulator: mjlab (MuJoCo-Warp) BeyondMimic tracking task, chosen over Isaac Sim (see README).
+  base_task: Mjlab-Tracking-Flat-Unitree-G1
+  task_id: WCT-Tracking-Flat-G1-SimOnly
+  sim_only:
+    drop_events: [push_robot, base_com, encoder_bias, foot_friction]   # domain randomization
+    obs_corruption: false
+    torque_scale: 1.0          # scales every actuator effort limit (1.0 = real G1)
+  convert:
+    fps: 50                    # our CSVs are 50 fps; mjlab tracking runs at 50 Hz
+  filter:
+    num_envs: 4096
+    max_iterations: 2000
+    logger: tensorboard
+    rollouts: 20
+    video: true              # record env 0 of the evaluation to review/policy_rollouts/<clip>.mp4
+    video_size: [960, 540]   # width, height
+    accept:
+      max_fall_rate: 0.10
+      max_mpjpe_m: 0.10
+      mpjpe_frame: root_relative   # root_relative (MPJPE as usually defined) | global (mjlab MPKPE, includes path drift)
+      min_completion: 0.95
+
+manifest:
+  lock_stale_s: 600          # a manifest lock older than this is treated as abandoned
+  lock_poll_s: 0.5
 
 slurm:
   head_host: head
@@ -153,3 +231,6 @@ slurm:
     cpus_per_task: 8
     mem: 48G
     time: "04:00:00"
+  stages:                  # per-stage overrides of the defaults
+    reconstruct:
+      gres: "gpu:l40s:1"   # gvhmr env is torch 2.3/cu121: no Blackwell (sm_120) kernels

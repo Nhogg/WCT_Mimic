@@ -16,4 +16,5 @@ dependencies:
       - scenedetect[opencv]
       - open_clip_torch
       - ultralytics
+      - smplx            # SMPL-X forward kinematics (Stage 5)
       - lap>=0.5.12     # BoT-SORT assignment (ultralytics otherwise auto-installs it)
