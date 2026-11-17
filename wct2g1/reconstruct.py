@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 from .config import Config
-from .manifest import failed, ok, read_manifest, upsert
+from .manifest import shard, filter_ids, failed, ok, read_manifest, upsert
 
 log = logging.getLogger(__name__)
 
@@ -49,13 +49,61 @@ def ensure_links(cfg: Config) -> Path:
 
 
 def resample_indices(n_src: int, src_fps: float, input_fps) -> tuple[np.ndarray, float]:
-    """Source frame indices to feed GVHMR and the resulting fps."""
-    if input_fps == "native" or float(input_fps) >= src_fps:
+    """Source frame indices to feed GVHMR and the resulting fps. Uses an integer frame stride
+    (the one closest to src_fps/input_fps): GVHMR assumes evenly spaced frames, and a
+    fractional stride (50 -> 30 fps gives steps of 2,1,2,2,1...) turns into jitter."""
+    if input_fps == "native":
         return np.arange(n_src), src_fps
-    tgt = float(input_fps)
-    n = int(np.floor((n_src - 1) * tgt / src_fps)) + 1
-    idx = np.round(np.arange(n) * src_fps / tgt).astype(int)
-    return np.clip(idx, 0, n_src - 1), tgt
+    k = max(1, int(round(src_fps / float(input_fps))))
+    return np.arange(0, n_src, k), src_fps / k
+
+
+def rotation_from_homography(pts0: np.ndarray, pts1: np.ndarray, K: np.ndarray) -> np.ndarray | None:
+    """Camera rotation (frame0 -> frame1) for a purely rotating camera: H = K R K^-1.
+    Returns None if no homography can be fitted."""
+    import cv2
+
+    if len(pts0) < 4:
+        return None
+    H, _ = cv2.findHomography(pts0.astype(np.float64), pts1.astype(np.float64), cv2.RANSAC, 4.0)
+    if H is None:
+        return None
+    M = np.linalg.inv(K) @ H @ K
+    U, _, Vt = np.linalg.svd(M)
+    R = U @ Vt
+    return R * np.sign(np.linalg.det(R))
+
+
+def patch_two_view_solver() -> dict:
+    """pycolmap>=4 returns no relative pose for panning-only (homography) pairs, where
+    GVHMR's solver crashes. Fall back to the homography rotation (zero translation; GVHMR
+    only uses R_w2c), else identity. Returns a counter of fallbacks."""
+    from hmr4d.utils.preproc.relpose import solver_two_view as stv
+
+    cls = stv.PycolmapRansacTwoViewGeometrySolver
+    stats = {"pairs": 0, "homography": 0, "identity": 0}
+    if getattr(cls, "_wct2g1_patched", False):
+        return cls._wct2g1_stats
+    orig = cls.solve
+
+    def solve(self, pts0, pts1):
+        stats["pairs"] += 1
+        try:
+            return orig(self, pts0, pts1)
+        except AttributeError:          # answer.cam2_from_cam1 is None
+            T = np.eye(4)
+            R = rotation_from_homography(pts0, pts1, self.camera_matrix)
+            if R is None:
+                stats["identity"] += 1
+            else:
+                stats["homography"] += 1
+                T[:3, :3] = R
+            return T
+
+    cls.solve = solve
+    cls._wct2g1_patched = True
+    cls._wct2g1_stats = stats
+    return stats
 
 
 class Gvhmr:
@@ -68,6 +116,7 @@ class Gvhmr:
         import hydra
         import torch
         from hydra import compose, initialize_config_module
+        import hmr4d.model.gvhmr.gvhmr_pl_demo  # noqa: F401  (registers model/gvhmr/gvhmr_pl_demo)
         from hmr4d.configs import register_store_gvhmr
         from hmr4d.utils.preproc import Extractor, VitPoseExtractor
 
@@ -80,6 +129,7 @@ class Gvhmr:
         self.vitpose = VitPoseExtractor(tqdm_leave=False)
         self.extractor = Extractor(tqdm_leave=False)
         self.torch = torch
+        self.vo_stats = patch_two_view_solver()
 
     def write_work_video(self, shot_video: Path, idx: np.ndarray, out: Path, fps: float) -> None:
         from hmr4d.utils.video_io_utils import get_video_reader, get_writer
@@ -99,6 +149,53 @@ class Gvhmr:
                 break
         writer.close()
         reader.close()
+
+    def dpvo_rotations(self, video: Path, width: int, height: int, length: int):
+        """World-to-camera rotations (L,3,3) from DPVO, as GVHMR's demo does with --use_dpvo.
+        Frames are fed in-process with the same preprocessing as GVHMR's SLAMModel: its reader
+        subprocess runs under DPVO's global 'spawn' start method, which re-imports our CLI in
+        the child and loads every model a second time on the GPU."""
+        import cv2
+        from pytorch3d.transforms import quaternion_to_matrix
+
+        torch = self.torch
+        from dpvo.config import cfg as dpvo_cfg
+        from dpvo.dpvo import DPVO
+        from hmr4d.utils.geo.hmr_cam import convert_K_to_K4, estimate_K
+
+        v = self.cfg["reconstruct"]["vo"]
+        r = v["dpvo_resize"]
+        dpvo_cfg.merge_from_file(str(self.root / "third-party/DPVO/config/default.yaml"))
+        dpvo_cfg.BUFFER_SIZE = length + v["dpvo_buffer_margin"]
+        intr = (convert_K_to_K4(estimate_K(width, height)) * r).cuda()
+        cap = cv2.VideoCapture(str(video))
+        slam, n = None, 0
+        try:
+            while True:
+                ok_, img = cap.read()
+                if not ok_:
+                    break
+                img = cv2.resize(img, None, fx=r, fy=r, interpolation=cv2.INTER_AREA)
+                h, w = img.shape[:2]
+                img = torch.from_numpy(img[: h - h % 16, : w - w % 16]).permute(2, 0, 1).cuda()
+                if slam is None:
+                    slam = DPVO(dpvo_cfg, "inputs/checkpoints/dpvo/dpvo.pth",
+                                ht=img.shape[1], wd=img.shape[2], viz=False)
+                with torch.no_grad():
+                    slam(n, img, intr)
+                n += 1
+            with torch.no_grad():
+                for _ in range(12):                              # as SLAMModel.process
+                    slam.update()
+                traj = slam.terminate()[0]                       # (L, 7): xyz, quat xyzw
+        finally:
+            cap.release()
+            del slam
+            torch.cuda.empty_cache()
+        if len(traj) != length:
+            raise RuntimeError(f"DPVO returned {len(traj)} poses for {length} frames")
+        q = torch.from_numpy(traj[:, [6, 3, 4, 5]]).float()      # -> wxyz
+        return quaternion_to_matrix(q).mT
 
     def run_track(self, video: Path, bbx_xyxy: np.ndarray, static: bool) -> dict:
         torch = self.torch
@@ -120,9 +217,19 @@ class Gvhmr:
         if static:
             R_w2c = torch.eye(3).repeat(length, 1, 1)
         else:
-            vo = SimpleVO(str(video), scale=rc["vo"]["scale"], step=rc["vo"]["step"],
-                          method=rc["vo"]["method"], f_mm=rc["f_mm"])
-            R_w2c = torch.from_numpy(vo.compute()[:, :3, :3]).float()
+            R_w2c = None
+            if rc["vo"]["backend"] == "dpvo":
+                R_w2c = self.dpvo_rotations(video, width, height, length)
+                if not torch.isfinite(R_w2c).all():
+                    log.warning("DPVO returned non-finite poses; falling back to SimpleVO")
+                    R_w2c = None
+            if R_w2c is None:
+                vo = SimpleVO(str(video), scale=rc["vo"]["scale"], step=rc["vo"]["step"],
+                              method=rc["vo"]["method"], f_mm=rc["f_mm"])
+                before = dict(self.vo_stats)
+                R_w2c = torch.from_numpy(vo.compute()[:, :3, :3]).float()
+                log.info("SimpleVO pairs %d, homography fallbacks %d, identity fallbacks %d",
+                         *(self.vo_stats[k] - before[k] for k in ("pairs", "homography", "identity")))
         if rc["f_mm"] is not None:
             K = create_camera_sensor(width, height, rc["f_mm"])[2].repeat(length, 1, 1)
         else:
@@ -131,6 +238,9 @@ class Gvhmr:
                 "K_fullimg": K, "cam_angvel": compute_cam_angvel(R_w2c), "f_imgseq": feats}
         with torch.no_grad():
             pred = detach_to_cpu(self.model.predict(data, static_cam=static))
+        for k, v in pred["smpl_params_global"].items():
+            if not torch.isfinite(v).all():
+                raise RuntimeError(f"GVHMR produced non-finite {k}")
         g, c = pred["smpl_params_global"], pred["smpl_params_incam"]
         betas_pf = g["betas"].numpy()
         return dict(
@@ -209,11 +319,12 @@ def run(cfg: Config, limit: int | None = None, ids: list[str] | None = None) -> 
     tracks = read_manifest(cfg, "tracks")
     tracks = tracks[tracks["status"] == "ok"]
     if ids:   # accept track ids or shot ids
-        tracks = tracks[tracks["track_id"].isin(ids) | tracks["shot_id"].isin(ids)]
+        tracks = filter_ids(tracks, ids)
     smpl = read_manifest(cfg, "smpl")
     if not smpl.empty:
         done = set(smpl.loc[smpl["status"] == "ok", "track_id"])
         tracks = tracks[~tracks["track_id"].isin(done)]
+    tracks = shard(tracks, "track_id")
     if limit:
         tracks = tracks.head(limit)
     log.info("reconstruct: %d tracks to process", len(tracks))
@@ -249,8 +360,11 @@ def run(cfg: Config, limit: int | None = None, ids: list[str] | None = None) -> 
                        path=str(out.relative_to(root)), status=ok())
             if tid in render_ids:
                 ov = cfg.path_of("review") / "smpl_renders" / f"{tid}.mp4"
-                render_review(g, work, out, ov, fps)
-                log.info("render: %s", ov)
+                try:                    # a review render must not fail a good reconstruction
+                    render_review(g, work, out, ov, fps)
+                    log.info("render: %s", ov)
+                except Exception:  # noqa: BLE001
+                    log.exception("review render failed for %s", tid)
         except Exception as e:  # noqa: BLE001
             log.exception("reconstruct failed for %s", tid)
             row["status"] = failed(e)
