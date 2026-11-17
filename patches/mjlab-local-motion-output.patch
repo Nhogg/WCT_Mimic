@@ -1,0 +1,55 @@
+diff --git a/src/mjlab/scripts/csv_to_npz.py b/src/mjlab/scripts/csv_to_npz.py
+index 3968fae7f..ca9c171f8 100644
+--- a/src/mjlab/scripts/csv_to_npz.py
++++ b/src/mjlab/scripts/csv_to_npz.py
+@@ -195,6 +195,7 @@ def run_sim(
+   render,
+   line_range,
+   renderer: OffscreenRenderer | None = None,
++  output_file: str | None = None,
+ ):
+   motion = MotionLoader(
+     motion_file=input_file,
+@@ -309,6 +310,18 @@ def run_sim(
+         ):
+           log[k] = np.stack(log[k], axis=0)
+ 
++        if output_file is not None:
++          # wct2g1 patch: save locally and skip the WandB upload.
++          print(f"Saving to {output_file}...")
++          np.savez(output_file, **log)
++          if render:
++            import mediapy as media
++
++            media.write_video(
++              str(output_file).removesuffix(".npz") + ".mp4", frames, fps=output_fps
++            )
++          return
++
+         print("Saving to /tmp/motion.npz...")
+         np.savez("/tmp/motion.npz", **log)
+ 
+@@ -348,6 +361,7 @@ def main(
+   device: str = "cuda:0",
+   render: bool = False,
+   line_range: tuple[int, int] | None = None,
++  output_file: str | None = None,
+ ):
+   """Replay motion from CSV file and output to npz file.
+ 
+@@ -359,6 +373,7 @@ def main(
+     device: Device to use.
+     render: Whether to render the simulation and save a video.
+     line_range: Range of lines to process from the CSV file.
++    output_file: Save the npz here instead of uploading to WandB (wct2g1 patch).
+   """
+   if device.startswith("cuda") and not torch.cuda.is_available():
+     print("[WARNING]: CUDA is not available. Falling back to CPU. This may be slow.")
+@@ -433,6 +448,7 @@ def main(
+     render=render,
+     line_range=line_range,
+     renderer=renderer,
++    output_file=output_file,
+   )
+ 
+ 
