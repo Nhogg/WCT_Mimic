@@ -54,7 +54,8 @@ def timestamps(frame_idx: np.ndarray, src_fps: float, speed_factor: float | None
 
 def resample(t: np.ndarray, rotvecs: np.ndarray, transl: np.ndarray, fps: float):
     """rotvecs (T,J,3), transl (T,3) at times t -> uniform grid at fps (slerp / lerp)."""
-    grid = np.arange(0.0, t[-1] + 1e-9, 1.0 / fps)
+    n = int(np.floor(t[-1] * fps + 1e-6)) + 1
+    grid = np.minimum(np.arange(n) / fps, t[-1])   # float rounding must not step past t[-1]
     out_r = np.empty((len(grid), rotvecs.shape[1], 3))
     for j in range(rotvecs.shape[1]):
         out_r[:, j] = Slerp(t, R.from_rotvec(rotvecs[:, j]))(grid).as_rotvec()

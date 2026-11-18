@@ -114,3 +114,11 @@ def test_runs_and_obstacle_mask():
     c = dict(hand_height_m=0.25, pelvis_rise_m=0.3, air_height_m=0.1, airborne_s=0.5, margin_s=0.2)
     m = clean.obstacle_mask(j, np.zeros(T), pelvis, 0.9, fps, c)
     assert not m[:140].any() and m[141:].all()          # 150 dilated back by 10 frames
+
+
+def test_resample_grid_never_exceeds_input_range():
+    for n_src in range(20, 400, 7):                     # many lengths hit the rounding edge
+        t = clean.timestamps(np.arange(0, 2 * n_src, 2).astype(float), 50.0, None)
+        rv = np.zeros((len(t), 2, 3))
+        grid, r, tr = clean.resample(t, rv, np.zeros((len(t), 3)), 50)
+        assert grid[-1] <= t[-1] and len(grid) == len(r)
