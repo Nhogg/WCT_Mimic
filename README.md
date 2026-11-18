@@ -27,8 +27,9 @@ All paths, thresholds and URLs live in `config.yaml`.
   retired upstream in favour of mjlab's tracking task; the cluster's GPU nodes run RHEL 10
   with no containers, which Isaac Sim 4.5 doesn't target. `wct2g1/sim_task.py` registers
   `WCT-Tracking-Flat-G1-SimOnly` (no domain randomization or observation noise,
-  `torque_scale` option). `patches/mjlab-local-motion-output.patch` lets mjlab's
-  `csv_to_npz` write a local file instead of uploading to W&B; apply with
+  `torque_scale` option). `patches/mjlab-csv_to_npz.patch` lets mjlab's
+  `csv_to_npz` write a local file instead of uploading to W&B (and loosens a float32
+  velocity self-check to 1e-4); apply with
   `scripts/apply_patches.sh`.
 - **GVHMR runs at ~30 fps with an integer frame stride** (`reconstruct.input_fps`; 50 fps
   footage -> 25 fps): it is trained at 30 fps, assumes evenly spaced frames, and predicts

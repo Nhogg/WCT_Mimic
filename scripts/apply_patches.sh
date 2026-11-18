@@ -9,4 +9,4 @@ apply() {  # <submodule dir> <patch>
     git -C "$ROOT/$1" apply "$ROOT/$2" && echo "applied: $2"
   fi
 }
-apply third_party/mjlab patches/mjlab-local-motion-output.patch
+apply third_party/mjlab patches/mjlab-csv_to_npz.patch
