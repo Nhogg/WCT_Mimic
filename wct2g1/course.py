@@ -242,6 +242,8 @@ def make_env_cfg(cfg, segments: list | None = None, num_rows: int | None = None,
                                               params={"command_name": "goal"})
     for name in ("upright", "pose"):
         e.rewards[name].weight = float(w[name])
+    if (p.get("style") or {}).get("enabled"):
+        _add_style(e, cfg)
     e.curriculum = {"course_levels": CurriculumTermCfg(
         func=course_levels, params={"command_name": "goal", "down": float(p["demote_below"])})}
     e.episode_length_s = float(p["episode_s"])
@@ -250,6 +252,30 @@ def make_env_cfg(cfg, segments: list | None = None, num_rows: int | None = None,
     if leftover:
         raise RuntimeError(f"terms still reference the twist command: {leftover}")
     return e
+
+
+def _add_style(e, cfg) -> None:
+    """WCT style reward (wct2g1.style) on the clips the M4 generalist trains on, plus
+    discriminator statistics as metrics. Style replaces the default-pose reward."""
+    from mjlab.managers.metrics_manager import MetricsTermCfg
+    from mjlab.managers.reward_manager import RewardTermCfg
+
+    from .generalist import training_clips
+    from .style import StyleReward, save_list, style_stat
+
+    st = cfg["parkour"]["style"]
+    lst = save_list(training_clips(cfg),
+                    cfg.path_of("policies") / "parkour" / cfg["parkour"]["run_name"]
+                    / "style_motions.txt")
+    e.rewards["style"] = RewardTermCfg(
+        func=StyleReward, weight=float(st["weight"]),
+        params=dict(motions=str(lst), hidden=list(st["hidden"]), lr=float(st["lr"]),
+                    buffer_size=int(st["buffer_size"]), batch_size=int(st["batch_size"]),
+                    updates=int(st["updates"]), update_every=int(st["update_every"]),
+                    gp_weight=float(st["gp_weight"])))
+    e.rewards["pose"].weight = float(st["pose_weight"])
+    for stat in ("d_expert", "d_policy", "loss", "gp"):
+        e.metrics[f"style_{stat}"] = MetricsTermCfg(func=style_stat, params={"stat": stat})
 
 
 def register(cfg) -> str:
@@ -290,8 +316,10 @@ def load_course(path: str, cfg) -> tuple[list, float]:
 def evaluate(cfg, checkpoint: str, num_envs: int, device: str, course: str | None = None,
              video: str | None = None, levels: int | None = None) -> dict:
     """Roll out one episode per env. With `course` (a YAML file) every env runs that
-    course; otherwise envs are spread evenly over `levels` random-course difficulty
-    levels. success = reached the goal without falling."""
+    course from the start line, facing it; otherwise envs are spread evenly over `levels`
+    random-course difficulty levels. success = reached the goal without falling.
+    Metrics count each env's first episode only. The video follows env 0 for the whole
+    evaluation window, so after a fall it shows the next attempt."""
     from dataclasses import asdict
 
     from mjlab.envs import ManagerBasedRlEnv
@@ -304,15 +332,21 @@ def evaluate(cfg, checkpoint: str, num_envs: int, device: str, course: str | Non
         segs, lane_x = load_course(course, cfg)
         e = make_env_cfg(cfg, segments=segs, lane_x=lane_x)
         e.commands["goal"].speed_range = (float(p["eval_speed_mps"]),) * 2
+        # Start at the start line facing the course (training spawns at any heading).
+        yaw = float(p["eval_spawn_yaw_rad"])
+        e.events["reset_base"].params["pose_range"]["yaw"] = (-yaw, yaw)
     else:
         e = make_env_cfg(cfg, num_rows=levels)
     e.curriculum = {}
+    e.rewards.pop("style", None)          # a training signal only
+    e.metrics = {k: v for k, v in e.metrics.items() if not k.startswith("style_")}
     e.commands["goal"].goal_y_jitter = 0.0
     e.terminations.pop("out_of_terrain_bounds", None)
     e.episode_length_s = float(p["eval_episode_s"])
     e.scene.num_envs = num_envs
     if video:
         e.viewer.width, e.viewer.height = cfg["train_filter"]["filter"]["video_size"]
+        e.viewer.max_extra_envs = 0          # only the followed robot, no overlapping ghosts
     env = ManagerBasedRlEnv(cfg=e, device=device, render_mode="rgb_array" if video else None)
     terrain = env.scene.terrain
     rows, cols = terrain.terrain_origins.shape[:2]
@@ -347,12 +381,12 @@ def evaluate(cfg, checkpoint: str, num_envs: int, device: str, course: str | Non
         t_reach = torch.where(new_reach, torch.full_like(t_reach, (step + 1) * dt), t_reach)
         reached |= live & goal.reached
         progress = torch.where(live, torch.maximum(progress, goal.progress), progress)
-        if video and not done[0]:
+        if video:            # the whole evaluation window: after a fall env 0 restarts
             frames.append(env.render())
         new = dones & ~done
         fell |= new & env.termination_manager.terminated
         done |= new
-        if done.all():
+        if done.all() and not video:
             break
     env.close()
     if video and frames:

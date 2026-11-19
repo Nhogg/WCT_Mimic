@@ -34,6 +34,8 @@ envs:
   obstacles: wct-data
   generalist_train: mjlab
   generalist_eval: mjlab
+  parkour_train: mjlab
+  parkour_eval: mjlab
   report: wct-data
 
 acquire:
@@ -264,6 +266,65 @@ generalist:
   rollouts: 20
   video: true                # review/generalist_rollouts/<run_name>/<clip>.mp4
 
+parkour:
+  # Milestone 6: reach the end of an obstacle course (wct2g1.course). Built on mjlab's G1
+  # rough-terrain velocity task; train_filter.sim_only applies. The policy sees the goal
+  # in its yaw frame, a desired speed and a height scan; no motion reference.
+  task_id: WCT-Parkour-Course-G1-SimOnly
+  base_task: Mjlab-Velocity-Rough-Unitree-G1
+  run_name: v2               # v1: no style reward; v2: + WCT style reward
+  lane_m: [10.0, 4.0]        # terrain cell: course length (x) and width (y)
+  variants: 6                # random courses per difficulty level (terrain columns)
+  levels: 10                 # difficulty levels (terrain rows), 0 = nearly flat
+  max_init_level: 2
+  border_m: 10.0
+  demote_below: 0.4          # curriculum: down a level if < 40 % of the course covered
+  course:                    # random course features; [easy, hard] ranges over difficulty
+    height_m: [0.05, 0.5]    # box/platform top (WCT boxes inferred in M5: 0.2-0.4 m)
+    gap_m: [0.1, 0.8]        # gap / pit width
+    run_m: [0.4, 1.4]        # flat run-up between features
+    hurdle_max_m: 0.35
+    pit_from: 0.5            # pits only from this difficulty
+    weights: {platform: 1.0, hurdle: 1.0, gap: 1.0, stairs: 1.0, pit: 0.5}
+  speed_mps: [0.6, 1.5]      # commanded speed range (per episode)
+  goal_y_jitter_m: 0.5
+  reach_radius_m: 0.5
+  episode_s: 20.0
+  scan_size_m: [2.0, 1.2]    # height scan (forward, sideways), centred scan_offset_m ahead
+  scan_offset_m: [0.4, 0.0]
+  scan_res_m: 0.1
+  rewards:
+    goal_velocity: 2.0       # horizontal velocity toward the goal (replaces lin-vel tracking)
+    goal_velocity_std: 0.5
+    heading: 1.0             # face the goal (mjlab angular-velocity tracking)
+    reached: 1.0             # per step at the goal
+    upright: 0.5             # mjlab G1: 1.0; parkour needs leaning
+    pose: 0.5                # mjlab G1: 1.0
+  style:                     # WCT motion style reward (wct2g1.style, adversarial motion prior)
+    enabled: true            # v1 trained without it
+    weight: 2.0              # r_style in [0, 1]; goal_velocity is 2.0
+    pose_weight: 0.0         # default-pose reward off: the clips define the posture
+    hidden: [1024, 512]      # discriminator MLP
+    lr: 1.0e-4
+    buffer_size: 1000000     # replay buffer of policy transitions (~5 PPO rollouts)
+    batch_size: 4096
+    updates: 4               # discriminator gradient steps per PPO rollout
+    update_every: 24         # = rsl_rl num_steps_per_env
+    gp_weight: 5.0           # gradient penalty on expert samples
+  num_envs: 8192
+  max_iterations: 20000
+  hidden_dims: [512, 256, 128]
+  save_interval: 1000
+  logger: tensorboard
+  checkpoint: null           # eval: explicit checkpoint; null = latest in the run dir
+  courses_dir: courses       # hand-written courses: courses/<name>.yaml
+  rollouts: 20               # per named course
+  eval_per_level: 50         # random-course evaluation: envs per difficulty level
+  eval_speed_mps: 1.0        # commanded speed on named courses
+  eval_episode_s: 25.0
+  eval_spawn_yaw_rad: 0.3    # named courses: start facing the course (+/- this)
+  video: true                # review/parkour/<run_name>/<course>.mp4
+
 manifest:
   lock_stale_s: 600          # a manifest lock older than this is treated as abandoned
   lock_poll_s: 0.5
@@ -280,4 +341,6 @@ slurm:
     reconstruct:
       gres: "gpu:l40s:1"   # gvhmr env is torch 2.3/cu121: no Blackwell (sm_120) kernels
     generalist_train:
+      time: "16:00:00"
+    parkour_train:
       time: "16:00:00"

@@ -1,0 +1,14 @@
+# Mixed course at WCT obstacle heights (M5 inferred boxes: 0.2-0.4 m).
+# Each item is one feature from wct2g1/course_profile.py (lengths/heights in metres);
+# a flat start and end zone are added automatically. Run it with
+#   python -m wct2g1.cli run parkour_eval --ids demo
+course:
+  - platform: {height: 0.2, length: 1.2}
+  - flat: 1.0
+  - hurdle: {height: 0.2}
+  - flat: 1.0
+  - stairs: {height: 0.4, steps: 3}
+  - flat: 1.0
+  - gap: {width: 0.4, height: 0.3}
+  - flat: 1.0
+  - platform: {height: 0.4, length: 1.0}

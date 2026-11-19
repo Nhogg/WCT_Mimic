@@ -18,7 +18,8 @@ class Config(dict):
     def __init__(self, data: dict[str, Any], path: Path):
         super().__init__(data)
         self.path = path
-        self.root = path.parent
+        # `root:` lets a run's config snapshot live outside the repo (relative = to the file)
+        self.root = (path.parent / data["root"]).resolve() if data.get("root") else path.parent
         self.hash = hashlib.sha256(
             json.dumps(data, sort_keys=True, default=str).encode()
         ).hexdigest()[:12]

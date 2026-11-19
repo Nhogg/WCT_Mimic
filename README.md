@@ -18,6 +18,7 @@ must not be published.
 | 7 | Train + filter (mjlab tracking) | `train_filter.py` | mjlab | 74/89 clips accepted (329 s); rollout videos |
 | M4 | One policy for all accepted clips | `generalist.py`, `multi_motion.py` | mjlab | v3 (look-ahead + terrain boxes + height scan): 73/74 clips pass (v2: 66, v1: 54) |
 | M5 | Obstacle boxes inferred from planted feet | `obstacles.py`, `multi_motion.py` | wct-data / mjlab | boxes in 5 clips; 1/5 box clips tracked without falls |
+| M6 | Reach the end of an obstacle course (+ WCT style reward) | `course.py`, `course_profile.py`, `parkour.py`, `style.py` | mjlab | v1 (no style) and v2 (style) training |
 
 Each stage reads the previous manifest (`data/manifests/<stage>.parquet`), skips items
 already `ok`/`rejected:*`, retries `failed:*`, and stamps rows with the config hash.
@@ -77,5 +78,23 @@ ARRAY=12 scripts/submit.sh generalist_eval    # per-clip rollouts -> manifests/g
 `generalist.run_name` in `config.yaml` names the run (`data/policies/generalist/<run_name>`,
 `review/generalist_rollouts/<run_name>/`). The multi-clip motion command takes a `.txt`
 list of npz files in place of a single motion file.
+
+Milestone 6 (parkour courses):
+
+```bash
+scripts/submit.sh parkour_train               # random courses with a difficulty curriculum
+scripts/submit.sh parkour_eval                # every level of random courses + courses/*.yaml
+scripts/submit.sh parkour_eval --ids demo     # one hand-written course: courses/demo.yaml
+```
+
+A course is a YAML list of features (`flat`, `platform`, `hurdle`, `gap`, `stairs`, `pit`;
+see `wct2g1/course_profile.py`). The policy walks from the start zone to the goal at the
+end; results go to `manifests/parkour.parquet`, videos to `review/parkour/<run_name>/`.
+
+`parkour.style` adds a WCT style reward: a discriminator trained during PPO rollouts
+(inside the env, `wct2g1/style.py`) scores how much each one-step transition of the robot
+looks like the retargeted WCT clips (adversarial motion prior). A run's config can be
+snapshotted outside the repo with `root:` pointing back at it, e.g.
+`WCT2G1_CONFIG=data/policies/parkour/v1/config.yaml scripts/submit.sh parkour_eval`.
 
 Tests: `conda activate wct-data && python -m pytest`.

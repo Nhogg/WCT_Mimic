@@ -1,0 +1,7 @@
+# A gentle course: low box, low hurdle, short stairs. Features: wct2g1/course_profile.py.
+course:
+  - platform: {height: 0.15, length: 1.2}
+  - flat: 1.0
+  - hurdle: {height: 0.1}
+  - flat: 1.0
+  - stairs: {height: 0.2, steps: 2}

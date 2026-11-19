@@ -5,7 +5,7 @@ parkour_train  trains one PPO policy on random obstacle courses with a difficult
 parkour_eval   rolls the policy out on (a) random courses at every difficulty level
                ("random") and (b) every hand-written course in parkour.courses_dir
                (courses/<name>.yaml), recording a video of each named course. Writes the
-               `parkour` manifest (one row per course). `--ids NAME` runs only those
+               `parkour` manifest (one row per run and course). `--ids NAME` runs only those
                courses, e.g. a new course you just wrote.
 """
 from __future__ import annotations
@@ -77,8 +77,8 @@ def eval_stage(cfg: Config, limit: int | None = None, ids: list[str] | None = No
         rd = run_dir(cfg) / "eval" / name
         rd.mkdir(parents=True, exist_ok=True)
         out = rd / "eval.json"
-        row = dict(course=name, checkpoint=str(ckpt.relative_to(cfg.root)),
-                   run_name=p["run_name"])
+        row = dict(eval_id=f"{p['run_name']}/{name}", course=name, run_name=p["run_name"],
+                   checkpoint=str(ckpt.relative_to(cfg.root)))
         cmd = [sys.executable, "-m", "wct2g1.mjlab_launch", "course-eval",
                "--config", str(cfg.path), "--checkpoint", str(ckpt),
                "--output-json", str(out)]

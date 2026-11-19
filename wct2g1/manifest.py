@@ -28,7 +28,7 @@ STAGE_KEYS = {
     "filter": "clip_id",
     "obstacles": "clip_id",
     "generalist": "clip_id",
-    "parkour": "course",
+    "parkour": "eval_id",          # <run_name>/<course>
 }
 # Order used by `wct2g1 report`.
 STAGE_ORDER = list(STAGE_KEYS)
