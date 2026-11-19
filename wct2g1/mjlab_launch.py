@@ -4,7 +4,11 @@
   python -m wct2g1.mjlab_launch eval   --config C [--task single|multi] --motion-file M
                                        --checkpoint P --num-envs N --output-json J
 
---task multi is the Milestone 4 multi-clip task (motion file may be a .txt list).
+  python -m wct2g1.mjlab_launch course-eval --config C --checkpoint P --num-envs N
+                                       --output-json J [--course YAML] [--levels L] [--video V]
+
+--task multi is the Milestone 4 multi-clip task (motion file may be a .txt list);
+--task course is the Milestone 6 parkour course task (wct2g1.course).
 """
 from __future__ import annotations
 
@@ -19,6 +23,9 @@ from .sim_task import register, register_multi
 
 
 def _register(cfg, task: str) -> str:
+    if task == "course":
+        from .course import register as register_course
+        return register_course(cfg)
     return register_multi(cfg) if task == "multi" else register(cfg)
 
 
@@ -117,7 +124,7 @@ def main() -> None:
     mode = sys.argv[1]
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
-    ap.add_argument("--task", choices=["single", "multi"], default="single")
+    ap.add_argument("--task", choices=["single", "multi", "course"], default="single")
     if mode == "train":
         args, rest = ap.parse_known_args(sys.argv[2:])
         train(load_config(args.config), rest, args.task)
@@ -131,6 +138,21 @@ def main() -> None:
         a = ap.parse_args(sys.argv[2:])
         m = evaluate(load_config(a.config), a.motion_file, a.checkpoint, a.num_envs, a.device,
                      a.video, a.task)
+        Path(a.output_json).write_text(json.dumps(m, indent=2))
+        print(json.dumps(m))
+    elif mode == "course-eval":
+        from .course import evaluate as course_evaluate
+
+        ap.add_argument("--checkpoint", required=True)
+        ap.add_argument("--num-envs", type=int, default=20)
+        ap.add_argument("--device", default="cuda:0")
+        ap.add_argument("--output-json", required=True)
+        ap.add_argument("--course", default=None)
+        ap.add_argument("--levels", type=int, default=None)
+        ap.add_argument("--video", default=None)
+        a = ap.parse_args(sys.argv[2:])
+        m = course_evaluate(load_config(a.config), a.checkpoint, a.num_envs, a.device,
+                            course=a.course, video=a.video, levels=a.levels)
         Path(a.output_json).write_text(json.dumps(m, indent=2))
         print(json.dumps(m))
     else:

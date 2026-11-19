@@ -27,6 +27,8 @@ STAGES = {
     "obstacles": "wct2g1.obstacles",                         # Milestone 5
     "generalist_train": "wct2g1.generalist:train_stage",   # Milestone 4
     "generalist_eval": "wct2g1.generalist:eval_stage",
+    "parkour_train": "wct2g1.parkour:train_stage",         # Milestone 6
+    "parkour_eval": "wct2g1.parkour:eval_stage",
 }
 
 
