@@ -14,7 +14,8 @@ import numpy as np
 from .config import load_config
 from .manifest import STAGE_ORDER, read_manifest, status_kind
 
-# CLI stage name -> module implementing `run(cfg, limit=, ids=, ...)`.
+# CLI stage name -> module implementing `run(cfg, limit=, ids=, ...)` ("module:function"
+# names another function with the same signature).
 STAGES = {
     "acquire": "wct2g1.acquire",
     "segment": "wct2g1.segment",
@@ -23,6 +24,9 @@ STAGES = {
     "clean": "wct2g1.clean",
     "retarget": "wct2g1.retarget",
     "train_filter": "wct2g1.train_filter",
+    "obstacles": "wct2g1.obstacles",                         # Milestone 5
+    "generalist_train": "wct2g1.generalist:train_stage",   # Milestone 4
+    "generalist_eval": "wct2g1.generalist:eval_stage",
 }
 
 
@@ -92,11 +96,12 @@ def main(argv: list[str] | None = None) -> int:
     if getattr(args, "shard", None):
         os.environ["WCT2G1_SHARD"] = args.shard
         logging.getLogger(__name__).info("shard %s", args.shard)
-    mod = importlib.import_module(STAGES[args.cmd])
+    mod_name, _, fn = STAGES[args.cmd].partition(":")
+    mod = importlib.import_module(mod_name)
     kwargs = {"limit": args.limit, "ids": args.ids}
     if args.cmd == "acquire":
         kwargs["manifest_only"] = args.manifest_only
-    mod.run(cfg, **kwargs)
+    getattr(mod, fn or "run")(cfg, **kwargs)
     return 0
 
 

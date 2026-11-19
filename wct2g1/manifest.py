@@ -26,6 +26,8 @@ STAGE_KEYS = {
     "clean": "clip_id",
     "g1": "clip_id",
     "filter": "clip_id",
+    "obstacles": "clip_id",
+    "generalist": "clip_id",
 }
 # Order used by `wct2g1 report`.
 STAGE_ORDER = list(STAGE_KEYS)

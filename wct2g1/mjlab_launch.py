@@ -1,8 +1,10 @@
 """Entry points run in the `mjlab` env (one process per clip, launched by train_filter).
 
-  python -m wct2g1.mjlab_launch train  --config C <mjlab train CLI args...>
-  python -m wct2g1.mjlab_launch eval   --config C --motion-file M --checkpoint P
-                                       --num-envs N --output-json J
+  python -m wct2g1.mjlab_launch train  --config C [--task single|multi] <mjlab train args...>
+  python -m wct2g1.mjlab_launch eval   --config C [--task single|multi] --motion-file M
+                                       --checkpoint P --num-envs N --output-json J
+
+--task multi is the Milestone 4 multi-clip task (motion file may be a .txt list).
 """
 from __future__ import annotations
 
@@ -13,19 +15,23 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .config import load_config
-from .sim_task import register
+from .sim_task import register, register_multi
 
 
-def train(cfg, argv: list[str]) -> None:
+def _register(cfg, task: str) -> str:
+    return register_multi(cfg) if task == "multi" else register(cfg)
+
+
+def train(cfg, argv: list[str], task_kind: str = "single") -> None:
     from mjlab.scripts import train as mj_train
 
-    task = register(cfg)
+    task = _register(cfg, task_kind)
     sys.argv = ["train", task, *argv]
     mj_train.main()
 
 
 def evaluate(cfg, motion_file: str, checkpoint: str, num_envs: int, device: str,
-             video: str | None = None) -> dict:
+             video: str | None = None, task_kind: str = "single") -> dict:
     """Roll out `num_envs` episodes from the clip start; fall rate, MPJPE (world-frame and
     root-relative), completion. Optionally records env 0 to `video` (mp4).
     Follows mjlab.tasks.tracking.scripts.evaluate but loads a local checkpoint."""
@@ -40,7 +46,7 @@ def evaluate(cfg, motion_file: str, checkpoint: str, num_envs: int, device: str,
     from mjlab.tasks.tracking.mdp.commands import MotionCommand
     from mjlab.tasks.tracking.mdp.metrics import compute_mpkpe, compute_root_relative_mpkpe
 
-    task = register(cfg)
+    task = _register(cfg, task_kind)
     env_cfg = load_env_cfg(task, play=False)
     agent_cfg = load_rl_cfg(task)
     mc = env_cfg.commands["motion"]
@@ -111,9 +117,10 @@ def main() -> None:
     mode = sys.argv[1]
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
+    ap.add_argument("--task", choices=["single", "multi"], default="single")
     if mode == "train":
         args, rest = ap.parse_known_args(sys.argv[2:])
-        train(load_config(args.config), rest)
+        train(load_config(args.config), rest, args.task)
     elif mode == "eval":
         ap.add_argument("--motion-file", required=True)
         ap.add_argument("--checkpoint", required=True)
@@ -123,7 +130,7 @@ def main() -> None:
         ap.add_argument("--video", default=None)
         a = ap.parse_args(sys.argv[2:])
         m = evaluate(load_config(a.config), a.motion_file, a.checkpoint, a.num_envs, a.device,
-                     a.video)
+                     a.video, a.task)
         Path(a.output_json).write_text(json.dumps(m, indent=2))
         print(json.dumps(m))
     else:
