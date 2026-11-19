@@ -31,6 +31,9 @@ envs:
   clean: wct-data
   retarget: gmr
   train_filter: mjlab
+  obstacles: wct-data
+  generalist_train: mjlab
+  generalist_eval: mjlab
   report: wct-data
 
 acquire:
@@ -219,6 +222,48 @@ train_filter:
       mpjpe_frame: root_relative   # root_relative (MPJPE as usually defined) | global (mjlab MPKPE, includes path drift)
       min_completion: 0.95
 
+obstacles:
+  # Milestone 5: boxes implied by planted feet above the floor (wct2g1.obstacles).
+  ground_percentile: 5       # ankle height on the floor = this percentile of the lower foot
+  max_foot_speed: 0.4        # m/s; slower counts as planted
+  min_stance_s: 0.08
+  min_height_m: 0.20         # lower raised stances are mostly floor-estimate error
+  merge_dz_m: 0.10           # stances within this height and ...
+  merge_dxy_m: 0.30          # ... this distance share one box
+  margins_m: [0.20, 0.12, 0.06]   # footprint margin around the planted foot; shrink if the reference passes through
+  min_size_m: 0.25           # minimum box footprint side
+  penetration_tol_m: 0.05
+  step_window_s: 0.25        # stance leg is not checked this long before/after its stance
+  max_penetration_frac: 0.05     # tolerate a few frames of reconstruction error
+
+generalist:
+  # Milestone 4: one tracking policy for all clips accepted by Stage 7 (sim-only task,
+  # multi-clip motion command). Evaluated per clip with train_filter.filter.accept.
+  task_id: WCT-Tracking-Multi-Flat-G1-SimOnly
+  run_name: v3
+  # v1 (current frame only, uniform_ratio 0.1): 54/74 training clips pass, plateaued at
+  # ~10k iterations with sampling concentrated on a few bins. v2 adds look-ahead and
+  # keeps more of the sampling uniform (66/74). v3 (Milestone 5) adds per-clip obstacle
+  # boxes and a height scan; each env tracks one clip.
+  future_steps: [2, 5, 10, 25]      # look-ahead offsets in control steps (50 Hz); [] = off
+  adaptive_uniform_ratio: 0.5       # mjlab default 0.1
+  terrain:                          # Milestone 5
+    enabled: true                   # obstacle boxes from wct2g1.obstacles + height scan
+    add_obstacle_clips: true        # also train on clips with boxes that Stage 7 rejected on flat ground
+    max_boxes: 4                    # box geoms per env (a clip may use fewer)
+    scan_size_m: [1.6, 1.0]         # height-scan grid around the pelvis (forward, sideways)
+    scan_res_m: 0.1
+    scan_max_m: 5.0
+  num_envs: 8192
+  max_iterations: 30000      # ~0.5-1 s/iteration on one GPU
+  hidden_dims: [1024, 512, 256]   # actor and critic (per-clip policies use 512-256-128)
+  save_interval: 1000
+  bin_s: 1.0                 # adaptive-sampling bin length; bins never span two clips
+  logger: tensorboard
+  checkpoint: null           # eval: explicit checkpoint path; null = latest in the run dir
+  rollouts: 20
+  video: true                # review/generalist_rollouts/<run_name>/<clip>.mp4
+
 manifest:
   lock_stale_s: 600          # a manifest lock older than this is treated as abandoned
   lock_poll_s: 0.5
@@ -234,3 +279,5 @@ slurm:
   stages:                  # per-stage overrides of the defaults
     reconstruct:
       gres: "gpu:l40s:1"   # gvhmr env is torch 2.3/cu121: no Blackwell (sm_120) kernels
+    generalist_train:
+      time: "16:00:00"

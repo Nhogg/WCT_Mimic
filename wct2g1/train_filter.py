@@ -5,8 +5,7 @@ kinematics; a short single-clip PPO policy is trained with the sim-only task; 20
 from the clip start measure fall rate, MPJPE and completion. Accepted clips are copied to
 data/final_dataset/. Each step runs in its own subprocess so GPU state is reset per clip.
 
-Multi-clip final training (Milestone 4) is not implemented yet: mjlab's motion command
-takes a single motion file, so it needs a stitched motion or a small sampler patch.
+Multi-clip training on the accepted clips (Milestone 4) is in wct2g1.generalist.
 """
 from __future__ import annotations
 
@@ -28,12 +27,29 @@ def _run(cmd: list[str], log_file: Path, cwd: Path) -> None:
     log_file.parent.mkdir(parents=True, exist_ok=True)
     pp = os.pathsep.join(filter(None, [str(REPO_ROOT), os.environ.get("PYTHONPATH")]))
     env = dict(os.environ, MUJOCO_GL="egl", PYTHONPATH=pp)   # wct2g1 importable from any cwd
+    dropped = 0
     with open(log_file, "w") as f:
-        r = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT, cwd=cwd, env=env)
-    if r.returncode != 0:
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=cwd,
+                             env=env, text=True, errors="replace")
+        assert p.stdout is not None
+        for line in p.stdout:
+            # MuJoCo-Warp prints these per step when contacts get hard (falls); a 30k
+            # iteration run otherwise writes gigabytes of them.
+            if line.startswith(_NOISE):
+                dropped += 1
+                continue
+            f.write(line)
+        rc = p.wait()
+        if dropped:
+            f.write(f"[wct2g1] dropped {dropped} solver iteration-limit warning lines\n")
+    if rc != 0:
         tail = log_file.read_text().splitlines()[-5:]
-        raise RuntimeError(f"{cmd[2] if len(cmd) > 2 else cmd[0]} exited {r.returncode}: "
+        raise RuntimeError(f"{cmd[2] if len(cmd) > 2 else cmd[0]} exited {rc}: "
                            + " | ".join(tail))
+
+
+_NOISE = ("solver iterations limit reached", "linesearch iterations limit reached",
+          "To disable the print warning: m.opt.warn_overflow")
 
 
 def convert(cfg: Config, csv: Path, out_npz: Path, logs: Path) -> None:

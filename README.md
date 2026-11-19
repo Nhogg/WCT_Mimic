@@ -12,10 +12,12 @@ must not be published.
 | 1 | Acquire (yt-dlp) | `acquire.py` | wct-data | run on 1 video |
 | 2 | Segment (PySceneDetect + open_clip) | `segment.py` | wct-data | run; ~75% precision, prompts need tuning |
 | 3 | Track (YOLO26 + BoT-SORT/ReID) | `track.py` | wct-data | run on all shots |
-| 4 | Reconstruct (GVHMR, own bbox wrapper) | `reconstruct.py` | gvhmr | run on M1 track (L40S only) |
-| 5 | Clean / retime / contacts / cut | `clean.py` | wct-data | run on M1; rolling floor, obstacle split |
-| 6 | Retarget (GMR → G1 CSV) | `retarget.py` | gmr | run on M1; joint limits report-only |
-| 7 | Train + filter (mjlab tracking) | `train_filter.py` | mjlab | M1 clip accepted; rollout videos; multi-clip final policy TODO |
+| 4 | Reconstruct (GVHMR, own bbox wrapper) | `reconstruct.py` | gvhmr | run on all 130 tracks of 1 video (L40S only) |
+| 5 | Clean / retime / contacts / cut | `clean.py` | wct-data | 89 clips (377 s); rolling floor, obstacle split |
+| 6 | Retarget (GMR → G1 CSV) | `retarget.py` | gmr | 89 clips; joint limits report-only |
+| 7 | Train + filter (mjlab tracking) | `train_filter.py` | mjlab | 74/89 clips accepted (329 s); rollout videos |
+| M4 | One policy for all accepted clips | `generalist.py`, `multi_motion.py` | mjlab | v3 (look-ahead + terrain boxes + height scan): 73/74 clips pass (v2: 66, v1: 54) |
+| M5 | Obstacle boxes inferred from planted feet | `obstacles.py`, `multi_motion.py` | wct-data / mjlab | boxes in 5 clips; 1/5 box clips tracked without falls |
 
 Each stage reads the previous manifest (`data/manifests/<stage>.parquet`), skips items
 already `ok`/`rejected:*`, retries `failed:*`, and stamps rows with the config hash.
@@ -61,5 +63,19 @@ scripts/run_stage.sh <stage> [--limit N] [--ids ...]   # on this machine
 scripts/submit.sh <stage> [--limit N] [--ids ...]      # as a SLURM GPU job via the head node
 scripts/run_stage.sh report
 ```
+
+Large stages shard over a SLURM array: `ARRAY=12 scripts/submit.sh train_filter` runs
+12 tasks, each taking the items whose id hashes to its shard.
+
+Milestone 4 (multi-clip policy), after Stage 7:
+
+```bash
+scripts/submit.sh generalist_train            # one GPU job, ~8 h for 30k iterations
+ARRAY=12 scripts/submit.sh generalist_eval    # per-clip rollouts -> manifests/generalist.parquet
+```
+
+`generalist.run_name` in `config.yaml` names the run (`data/policies/generalist/<run_name>`,
+`review/generalist_rollouts/<run_name>/`). The multi-clip motion command takes a `.txt`
+list of npz files in place of a single motion file.
 
 Tests: `conda activate wct-data && python -m pytest`.
